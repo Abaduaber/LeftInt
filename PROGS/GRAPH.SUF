@@ -1,0 +1,159 @@
+;Graph V1.0 - библиотека для расширенной работы с графикой
+;На данный момент процедуры BMPLoad и Draw работают только в режиме 13h (320x200x256)
+
+; -----Имена переменных-----
+Define Width='3'
+Define Height='4'
+Define BPP='5'
+Define EolSign='6'
+Define FileNameStart='7'
+Define MemStart='8'
+Define Temp='9'
+Define IsSetPal='10'
+Define CurByte='11'
+Define Red='12'
+Define Green='13'
+Define Blue='14'
+Define CurX='33'
+Define CurY='34'
+Define II='32'
+Define XP='31'
+Define YP='30'
+Define Regs='500'
+
+; -----Имена функций-----
+Define OpenF='~(10)'
+Define Seek='~(10)'
+Define WriteF='~(11)'
+Define ReadF='~(12)'
+Define CloseF='~(13)'
+
+;Процедура BMPLoad.
+;Загружает изображение в память. Поддержка только 8 бит BMP.
+;Параметры: FileNameStart, MemStart, IsLoadPal
+;FileNameStart - переменная, с которой располагается строка с именем файла
+;MemStart - переменная, начиная с которой нужно грузить изображение
+;IsLoadPal - если 0, то не грузить палитру, иначе грузить.
+;Структура MemStart на выходе: 1 - Длина, 2 - Ширина изображения. 3 и далее - данные.
+;Данные умещаются из расчета, что в каждой переменной хранится информация сразу о двух точках
+={BMPLoad}=
+	?[Width,Height,BPP,EolSign,FileNameStart,MemStart,Temp]
+	?[IsSetPal,CurByte,Red,Green,Blue,II]
+	$(IsSetPal)(G)
+	$(MemStart)(G)
+	$(FileNameStart)(G)
+	OpenF(FileNameStart$,1,0)
+    
+    {ReadHeader}
+	Seek(18,1,2)
+	ReadF(1,Width,EolSign)
+	ReadF(1,Temp,EolSign)
+	$(Width)(Width$^Temp$^256*+)
+
+	Seek(22,1,2)
+	ReadF(1,Height,EolSign)
+	ReadF(1,Temp,EolSign)
+	$(Height)(Height$^Temp$^256*+)
+
+	Seek(28,1,2)
+	ReadF(1,BPP,EolSign)  
+
+	$(Temp)(4^Width$^4%-)
+	#(Temp$^4-|)<Check1>
+	$(Temp)(0) ;Теперь temp будет хранить величину ремайндера каждой строки изображения.
+
+    {Check1}
+	#(IsSetPal$)<AfterLoadPal>
+    {LoadPal}
+	;Загружаем и устанавливаем палитру   
+	Seek(54,1,2)
+	$(II)(0)
+	~(7)(968,0)
+    {SetPal}
+	ReadF(1,Blue,EolSign)    
+	ReadF(1,Green,EolSign)  
+	ReadF(1,Red,EolSign)  
+	ReadF(1,EolSign,EolSign)
+	~(7)(969,Red$^4/)
+	~(7)(969,Green$^4/)
+	~(7)(969,Blue$^4/)
+	$(II)(II$^1+)
+	#(II$^256-|)<SetPal>
+    {AfterLoadPal}
+	Seek(1078,1,2)
+	$(MemStart$)(Width$,Height$)
+	$(MemStart)(MemStart$^2+)
+	$(CurX)(0)
+    {LoadLine}
+	ReadF(1,Red,EolSign)
+	$(MemStart$)(Red$)
+	#(EolSign$)<Exit>
+	$(CurX)(CurX$^1+)
+	#(CurX$^Width$-)<AfterLoadLine>
+
+	ReadF(1,CurByte,EolSign)
+	$(MemStart$)(CurByte$^256*^Red$+)
+	#(EolSign$)<Exit>
+	$(MemStart)(MemStart$^1+)
+	$(CurX)(CurX$^1+)
+	#(CurX$^Width$-|)<LoadLine>
+    {AfterLoadLine}
+	#(Temp$)<AfterDec>
+	$(II)(Temp$)
+    {DecAgain}
+	$(II)(II$^1-)
+	ReadF(1,CurByte,EolSign)
+	#(EolSign$)<Exit>
+	#(II$|)<DecAgain>
+    {AfterDec}
+	$(CurX)(0)
+	#<LoadLine>
+    {Exit}
+	CloseF(1)
+**
+
+;Процедура Draw.
+;Рисует изображение.
+;Параметры: XP, YP, MemStart
+={Draw}=
+	?[XP,YP,Width,Height,CurX,CurY,MemStart]
+	$(MemStart)(G)
+	$(YP)(G,G)
+	$(Width)(MemStart$$,MemStart$^1+$)
+	$(MemStart)(MemStart$^2+)
+	$(CurY)(YP$^Height$+^1-)
+	$(YP)(YP$^1-)
+	$(CurX)(XP$)
+    {Loop}
+	M(~HA000,CurY$^320*^XP$+,S,MemStart$^2*,Width$)
+	$(MemStart)(MemStart$^Width$^2/+)
+	$(CurY)(CurY$^1-)
+	#(CurY$^YP$-|)<Loop>
+    {End}
+**
+
+={Scr}=
+	?[3,4]
+	$(4)(G)
+	$(3)(G)
+	$(3$)(0,4$)  ;AH = 0; AL = 4$
+	~(9)(16,3$) 
+**
+
+;Ждет вертикального обратного хода луча
+={WaitR}=
+	?[3]
+    {FirstWaitR}
+	~(8)(~H3DA,3)
+	$(3)(3$^8.)
+	#(3$|)<FirstWaitR>
+    {SecondWaitR}
+	~(8)(~H3DA,3)
+	$(3)(3$^8.)
+	#(3$)<SecondWaitR>
+**
+
+={GoToXY}= ;Установка курсора вывода текста по координатам X и Y.
+	$(Regs)(2,0,0,0,0,0,G,G)
+	~(9)(16,Regs)   
+**

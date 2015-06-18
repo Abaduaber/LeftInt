@@ -1,0 +1,880 @@
+;LINT ST > ASM TRANSLATOR DATA FILE
+
+INITBLOCK START
+;-----Блок инициализации-----
+	mov di,Text
+	xor ax,ax
+	mov cx,0FFFFh
+	sub cx,Text
+	dec cx
+	rep stosb
+	;FIDS
+	mov ax,0FFFFh
+	mov cx,15
+	mov di,FIDS
+	rep stosw
+	mov ax,cs
+	cmp ax,8000h
+	jbe InitVars
+	mov ah,9
+	mov dx,InitFailStr
+	int 21h
+	ret
+InitVars:
+	add ax,1000h
+	;--ES: Vars--
+	mov es,ax
+	;--Обнуление переменных--
+	xor ax,ax
+	xor di,di
+	mov cx,8000h
+	rep stosw
+	mov di,RPSt
+	mov si,ParSt
+	mov bp,LocSt
+
+INITBLOCK END
+
+GETVARBLOCK START
+;-----Чтение из переменной----- AX = значение переменной
+GetVar:
+	mov bx,ax
+	dec bx
+	jz InpChar
+	dec bx
+	jz InpVal
+	add bx,bx
+	mov ax,[es:bx]
+	ret
+InpVal:
+	push si
+	push di
+	push bp
+AfterPush:
+	mov ah,0ah
+	mov dx,BufSize
+	mov [BufLen],7
+	int 21h
+	xor di,di
+	xor ax,ax
+	mov cl,[BufLen]
+	xor ch,ch
+	xor bx,bx
+	mov si,cx
+	mov cl,10
+	xor bp,bp
+	cmp byte [Text+di],'-'
+	jne ConvToBin
+	inc bp
+	inc di
+ConvToBin:
+	mov bl,byte [Text+di]
+	sub bl,"0"
+	jb OneError
+	cmp bl,9
+	ja OneError
+	mul cx
+	add ax,bx
+	inc di
+	cmp di,si
+	jb ConvToBin
+AfterAll:
+	dec bp
+	jnz NotNeg
+	neg ax
+NotNeg:
+	mov bx,ax
+	mov ah,6
+	mov dl,10
+	int 21h
+	mov ax,bx
+	pop bp
+	pop di
+	pop si
+	ret
+InpChar:
+	xor ax,ax
+	int 16h
+	xor ah,ah
+	ret
+OneError:
+	mov dx,SysStr1
+	mov ah,9
+	int 21h
+	jmp AfterPush
+
+GETVARBLOCK END
+
+SETVARBLOCK START
+;-----Запись в переменную----- номер в [Remem], значение на стеке
+SetVar:
+	dec word [Remem]
+	add di,2
+	mov [di],ax
+	mov dx,di
+	mov di,RPSt
+SetNextVar:
+	inc word [Remem]
+	add di,2
+	cmp di,dx
+	ja SetDone
+	mov ax,[di]
+	mov bx,[Remem]
+	dec bx
+	jz OutChar
+	dec bx
+	jz OutVal
+	add bx,bx
+	mov [es:bx],ax
+	jmp SetNextVar
+SetDone:
+	mov di,RPSt
+	ret
+OutVal:
+	push si
+	push ax
+	push dx
+	mov si,Text
+	test ax,ax
+	jns m0
+	neg ax
+	mov [si],byte '-'
+	inc si
+m0:
+	mov bx,10
+	xor cx,cx
+m1:
+	xor dx,dx
+	idiv bx
+	push dx
+	inc cx
+	test ax,ax
+	jnz m1
+m2:
+	pop ax
+	add al,"0"
+	mov [si],al
+	inc si
+	loop m2
+	mov [si],word 3338
+	add si,2
+	mov [si],byte '$'
+	mov dx,Text
+	mov ah,9
+	int 21h
+	pop dx
+	pop ax
+	pop si
+	jmp SetNextVar
+OutChar:
+	push ax
+	mov ah,0eh
+	xor bh,bh
+	int 10h
+	pop ax
+	jmp SetNextVar
+
+SETVARBLOCK END
+
+PUSHALLOPBLOCK START
+;-----Весь стек ОПЗ в стек параметров-----
+PushAllOp:
+	mov bx,RPSt
+	push ax
+	cmp bx,di
+	je PopOne
+	add si,2
+	add bx,2
+	mov ax,[bx]
+	mov [si],ax
+	cmp bx,di
+	jne $-12
+PopOne:
+	add si,2
+	pop word [si]
+	mov di,RPSt ;!!!
+	ret
+
+PUSHALLOPBLOCK END
+
+PUSHVARSBLOCK START
+;-----Объявление локальных переменных-----
+PushVars:
+	mov dx,[bp]
+	test dx,dx
+	jz LocVarBlock
+	sub bp,2
+	mov dx,[bp]
+	sub bp,2
+LocVarBlock:
+	push dx
+	add bp,2
+	mov cx,1
+	mov dx,RPSt
+	sub ax,2
+	mov bx,ax
+	add bx,bx
+	mov bx,[es:bx]
+	mov [bp],bx
+	add bp,2
+	mov [bp],ax
+	cmp di,dx
+	je short SaveLast
+SaveNext:
+	add bp,2
+	mov ax,[di]
+	sub ax,2
+	mov bx,ax
+	add bx,bx
+	mov bx,[es:bx]
+	mov [bp],bx
+	add bp,2
+	mov [bp],ax
+	sub di,2
+	inc cx
+	cmp di,dx
+	jne short SaveNext
+SaveLast:
+	pop ax
+	add ax,cx
+	add bp,2
+	mov [bp],ax
+	add bp,2
+	mov [bp],word 1
+	mov di,RPSt
+	ret
+
+;-----Восстановление старых значений-----
+RestoreVars:
+	mov ax,[bp]
+	test ax,ax
+	jz AfterRestore
+	sub bp,2
+	mov cx,[bp]
+	sub bp,2
+RestoreNext:
+	mov bx,[bp]
+	sub bp,2
+	mov ax,[bp]
+	sub bp,2
+	add bx,bx
+	mov [es:bx],ax
+	dec cx
+	jnz RestoreNext
+AfterRestore:
+	sub bp,2
+	ret
+
+PUSHVARSBLOCK END
+
+INITRANDOMBLOCK START
+;-----Инициализация и генерация случайного числа-----
+InitRandom:
+	mov ah,2ch
+	int 21h
+	mov word [RandSeed],cx
+	mov word [RandSeed+2],dx
+	ret
+RandSeed DD ?
+RandVal DW 8405h
+GetRandom:
+	push si
+	mov si,ax
+	mov ax,word [RandSeed]
+	mov bx,word [RandSeed+2]
+	mov cx,dx
+	mul [RandVal]
+	shl cx,3
+	add ch,cl
+	add dx,cx
+	add dx,bx
+	shl bx,2
+	add dx,bx
+	add dh,bl
+	shl bx,5
+	add dh,bl
+	add ax,1
+	adc dx,0
+	mov word [RandSeed],ax
+	mov word [RandSeed+2],dx
+	mov cx,dx
+	mul si
+	mov ax,cx
+	mov cx,dx
+	mul si
+	add ax,cx
+	adc dx,0
+	mov ax,dx
+	pop si
+	ret
+
+INITRANDOMBLOCK END
+
+MOVEMEMBLOCK START
+;-----Выполнение команды прямого копирования в память-----
+MoveMem:
+	test ax,ax
+	jz AfterMoveMem
+	push es
+	push ds
+	push si
+	push di
+	mov dx,ax
+	mov cx,ax
+	shr cx,1
+	mov ax,es	
+	push word [di]
+	push word [di-2]
+	push word [di-4]
+	push word [di-6]	
+	pop es
+	pop di
+	pop ds
+	pop si
+	push bp
+	mov bp,es
+	cmp ax,bp
+	jne NotCorr1
+	sub di,4
+NotCorr1:
+	mov bp,ds
+	cmp ax,bp
+	jne NotCorr2
+	sub si,4
+NotCorr2:
+	pop bp
+	cmp dx,1
+	je MoveLast
+	rep movsw
+	and dx,1
+	dec dx
+	jnz NotMoveLast
+MoveLast:
+	mov al,byte [si]
+	mov byte [es:di],al
+NotMoveLast:
+	pop di
+	pop si
+	pop ds
+	pop es
+AfterMoveMem:
+	mov di,RPSt
+	ret
+MOVEMEMBLOCK END
+
+COPYSTRBLOCK START
+;-----Выполнение помещения в стек тектовой строки. (BX - смещение к строке)-----
+CopyStr:
+	mov [di],ax
+	xor ax,ax
+CopyCharLoop:
+	mov al,[bx]
+	test ax,ax
+	jz AfterCopyCharLoop
+	add di,2
+	mov [di],ax
+	inc bx
+	jmp CopyCharLoop
+AfterCopyCharLoop:
+	mov ax,[di]
+	sub di,2
+	ret
+
+COPYSTRBLOCK END
+
+EXECMDBLOCK START
+;-----Выполнение команды модификации (код в AX)-----
+ExeCmd:
+	mov bl,al
+	mov ax,[di]
+	sub di,2
+	cmp bl,"0"
+	jl ExeCmd2
+	cmp bl,"9"
+	jg ExeCmd2
+	jmp ExeValue
+ExeCmd2:
+	cmp bl,"+"
+	je ExeAdd
+	cmp bl,"-"
+	je ExeSub
+	cmp bl,"*"
+	je ExeMul
+	cmp bl,"/"
+	je ExeDiv
+	cmp bl,"%"
+	je ExeMod
+	cmp bl,"^"
+	je ExeIncS
+	cmp bl,"!"
+	je ExeSign
+	cmp bl,"|"
+	je Exe10
+	cmp bl,"@"
+	je ExeSqr
+	cmp bl,"&"
+	je ExePow
+	cmp bl,"$"
+	je ExeReadVar
+	cmp bl,"g"
+	je ExeGet
+	cmp bl,"G"
+	je ExeGet
+	cmp bl,"p"
+	je ExePut
+	cmp bl,"P"
+	je ExePut
+	cmp bl,"?"
+	je ExeRandom
+	jmp ExeBad
+ExeValue:
+	sub bl,"0"
+	mov cx,ax
+	shl ax,3
+	add ax,cx
+	add ax,cx
+	add ax,bx
+	ret
+ExeAdd:
+	add ax,[di] ;+
+	sub di,2
+	ret
+ExeSub:
+	sub [di],ax ;-
+	mov ax,[di]
+	sub di,2
+	ret
+ExeMul:
+	imul word [di] ;*
+	sub di,2
+	ret
+ExeDiv:
+	xor dx,dx ;/
+	mov bx,ax
+	mov ax,[di]
+	sub di,2
+	idiv bx
+	ret
+ExeMod:
+	xor dx,dx ;%
+	mov bx,ax
+	sub ax,[di]
+	sub di,2
+	idiv bx
+	mov ax,dx
+	ret
+ExeIncS:
+	add di,2 ;^
+	mov [di],ax
+	ret
+ExeSign:
+	test ax,ax
+	jg short $+6
+	jl short $+9
+	jmp short $+10
+	mov ax,1
+	jmp short $+5
+	mov ax,-1
+	ret
+Exe10:
+	test ax,ax
+	jnz short $+5
+	inc ax
+	jmp short $+4
+	xor ax,ax
+	ret
+ExeSqr:
+	mov bx,1
+	xor cx,cx
+	sub ax,bx
+	add bx,2
+	inc cx
+	cmp ax,bx
+	jge short $-8
+	mov ax,cx
+	ret
+ExePow:
+	mov cx,[di]
+	sub di,2
+	mov bx,ax
+	mov ax,1
+	imul bx
+	dec cx
+	jnz short $-3
+	ret
+ExeReadVar:
+	call GetVar
+	ret
+ExeGet:
+	mov ax,[si]
+	sub si,2
+	ret
+ExePut:
+	add si,2
+	mov [si],ax
+	ret
+ExeRandom:
+	call GetRandom
+	ret
+ExeBad:
+	mov dx,SysStr2
+	mov ah,9
+	int 21h
+	xor ax,ax
+	int 16h
+	int 20h
+
+EXECMDBLOCK END
+
+RUNSPECCMDBLOCK START
+;-----Выполнение расширенных команд (код в [Remem])-----
+RunSpec:
+	mov bx,[Remem]
+	cmp bx,1
+	jb SpecCmdErr
+	cmp bx,20
+	ja SpecCmdErr
+	dec bx
+	add bx,bx
+	call word [CTable+bx]
+	mov di,RPSt
+	ret
+RunSetGM:
+	ret
+RunPSet:
+	ret
+RunLine:
+	ret
+RunCircle:
+	ret
+RunGetPC:
+	ret
+RunSound:
+	test ax,ax
+	jz NoSound
+	mov bx,ax
+	mov ax,034ddh
+	mov dx,12h
+	cmp dx,bx
+	jc OverRetSound
+	ret
+	OverRetSound:
+	div bx
+	mov bx,ax
+	in al,61h
+	test al,3
+	jnz NextSound
+	or al,3
+	out 61h,al
+	mov al,0b6h
+	out 43h,al
+	NextSound:
+	mov al,bl
+	out 42h,al
+	mov al,bh
+	out 42h,al
+	ret
+	NoSound:
+	in al,61h
+	and al,0fch
+	out 61h,al
+	ret
+RunWritePort:
+	mov dx,[di]
+	out dx,al
+	ret
+RunReadPort:
+	mov [Remem],ax
+	mov dx,[di]
+	in al,dx
+	mov di,RPSt
+	call SetVar
+	ret
+RunInt:
+	mov bx,[di]
+	mov [Interrupt+1],bl
+	mov bx,ax
+	sub bx,2
+	add bx,bx
+	jmp OverRegs
+	ESDIStorage:
+		dd 0
+	OverRegs:
+		mov ax,es
+		mov [cs:ESDIStorage],ax
+		mov [cs:ESDIStorage+2],bx
+		push es
+		push ds
+		push di
+		push si
+		push bp
+		mov dx,4
+	Push8:
+		mov ax,[es:bx]
+		add bx,2 
+		mov cx,[es:bx]
+		mov ah,al
+		mov al,cl
+		push ax
+		add bx,2
+		dec dx
+		jnz Push8
+	push word [es:bx]
+	add bx,2
+	push word [es:bx]
+	add bx,2
+	push word [es:bx]
+	add bx,2
+	push word [es:bx]
+	add bx,2
+	push word [es:bx]
+	pop bp
+	pop si
+	pop di
+	pop ds
+	pop es
+	pop dx
+	pop cx
+	pop bx
+	pop ax
+	Interrupt:
+	int 0
+	push ax
+	push bx
+	push cx
+	push dx
+	push es
+	push ds
+	push di
+	push si
+	push bp
+	mov ax,[cs:ESDIStorage]
+	mov es,ax
+	mov di,[cs:ESDIStorage+2]
+	pop word [es:di+24]
+	pop word [es:di+22]
+	pop word [es:di+20]
+	pop word [es:di+18]
+	pop word [es:di+16]
+	mov dx,4
+	add di,14
+		Pop8:
+		pop ax
+		xor bx,bx
+		mov bl,ah
+		xor ah,ah
+		mov word [es:di],ax
+		sub di,2
+		mov word [es:di],bx
+		sub di,2
+		dec dx
+		jnz Pop8
+	pop bp
+	pop si
+	pop di
+	pop ds
+	pop es
+	ret
+RunOpenFile:
+	xor dx,dx
+	mov dh,3dh
+	test ax,ax
+	jz OpenForReadWrite
+	dec dh
+	dec ax
+	jz OpenForReadWrite
+	dec ax
+	jz SeekInFile
+	ret
+	OpenForReadWrite:
+		call GetFileID
+		push bx
+		call GetFileName
+		mov ax,dx
+		mov dx,Text
+		xor cl,cl
+		int 21h
+		jc OpenError
+		pop bx
+		mov [FIDS+bx],ax
+		ret
+	SeekInFile:
+		mov ax,4200h
+		call GetFileID
+		mov bx,[FIDS+bx]
+		mov dx,[di]
+		xor cx,cx
+		int 21h
+		jc SeekError
+		ret
+	GetFileName:
+		mov bx,[di]
+		push si
+		mov si,Text
+		mov cx,255 ;!!!
+		CopyNextChar:
+		push bx
+		push cx
+		mov ax,bx
+		call GetVar
+		pop cx
+		pop bx
+		test ax,ax
+		jz AfterCopyChars
+		mov [si],al
+		inc bx
+		inc si
+		dec cx
+		jnz CopyNextChar
+		AfterCopyChars:
+		mov [si],word 0	
+		pop si
+		ret
+	OpenError:
+		mov dx,OpenFileErrStr
+		call SpecCmdErr
+	SeekError:
+		mov dx,SeekFileErrStr
+		call SpecCmdErr
+	WrongFileIDError:
+		mov dx,WrongFileIDErrStr
+		call SpecCmdErr
+RunWriteByte:
+	call GetFileID
+	mov bx,[FIDS+bx]
+	mov [Text],al
+	mov ah,40h
+	mov dx,Text
+	mov cx,1
+	int 21h
+	jc WriteError
+	ret
+	WriteError:
+		mov dx,WriteFileErrStr
+		call SpecCmdErr
+	GetFileID:
+		mov bx,[di]
+		sub di,2
+		test bx,bx
+		jz WrongFileIDError
+		cmp bx,15 ;!!!
+		ja WrongFileIDError
+		add bx,bx
+		ret
+RunReadByte:
+	mov cx,[di]
+	sub di,2
+	call GetFileID
+	mov bx,[FIDS+bx]
+	push ax
+	push cx
+	mov ah,3fh
+	mov cx,2
+	mov dx,Text
+	int 21h
+	jc ReadError
+	dec ax
+	jz ProcessEOF
+	js ReadError
+	pop word [Remem]
+	xor ax,ax
+	mov al,[Text]
+	push bx
+	call SetVar
+	pop bx
+	mov cx,0ffffh
+	mov dx,cx
+	mov ax,4201h
+	int 21h
+	jc SeekError
+	pop word [Remem]
+	mov ax,1
+	call SetVar
+	ret
+	ProcessEOF:
+		pop word [Remem]
+		xor ax,ax
+		mov al,[Text]
+		call SetVar
+		pop word [Remem]
+		xor ax,ax
+		call SetVar
+		ret
+	ReadError:
+		mov dx,ReadFileErrStr
+		call SpecCmdErr
+RunCloseFile:
+	mov bx,ax
+	test bx,bx
+	jz WrongFileIDError
+	cmp bx,15
+	ja WrongFileIDError
+	add bx,bx
+	push bx
+	mov bx,[FIDS+bx]
+	mov ah,3eh
+	int 21h
+	jc CloseFileError
+	pop bx
+	mov [FIDS+bx],word 0FFFFh
+	ret
+	CloseFileError:
+		mov dx,CloseFileErrStr
+		call SpecCmdErr
+RunSetPalColor:
+	ret
+RunPause:
+	push es
+	xor dx,dx
+	mov bx,6
+	div bx
+	push ax
+	mov ax,40h
+	mov es,ax
+	mov di,6ch
+	mov bx,[es:di]
+	pop cx
+	add bx,cx
+	WaitLoop:
+	mov ax,[es:di]
+	cmp bx,ax
+	ja WaitLoop
+	pop es
+	ret
+RunClrScr:
+	push es
+	push di
+	mov ax,0b800h
+	mov es,ax
+	xor di,di
+	mov cx,80*25
+	mov ax,720h
+	rep stosw
+	pop di
+	pop es
+	mov ah,02h
+	xor bh,bh
+	xor dx,dx
+	int 10h
+	ret
+RunFloodFill:
+	ret
+RunOutText:
+	ret
+RunOutVal:
+	ret
+RunOutChar:
+	ret
+SpecCmdErr:
+	mov ah,9
+	int 21h
+	xor ax,ax
+	int 16h
+	int 20h
+
+RUNSPECCMDBLOCK END
+
+JUMPTABLEBLOCK START
+CTable DW RunSetGM,RunPSet,RunLine,RunCircle,RunGetPC,RunSound,RunWritePort,RunReadPort,RunInt,RunOpenFile,RunWriteByte,RunReadByte,RunCloseFile,RunSetPalColor,RunPause,RunClrScr,RunFloodFill,RunOutText,RunOutVal,RunOutChar
+JUMPTABLEBLOCK END
+
